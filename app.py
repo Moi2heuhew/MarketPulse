@@ -792,6 +792,15 @@ EVENEMENTS_GEO = {
         "reference": "Caldara & Iacoviello (AER 2022) : un risque géopolitique élevé annonce "
                      "un investissement, des cours et un emploi plus faibles.",
     },
+        "Conflit armé et escalade militaire": {
+        "canal_principal": "confiance",
+        "propagation": {"confiance": 1.2, "energie": 0.7, "defense": 0.7, "taux": 0.4},
+        "ordre1": "Prime de risque immédiate sur les actifs cycliques ; pétrole et or recherchés.",
+        "ordre2": "Rotation vers les valeurs défensives ; les carnets de commandes de défense se reforcent.",
+        "duree": "choc bref si le conflit est localisé, durable en cas d'extension géographique",
+        "exemples": "Guerre du Golfe 1990-91 ; invasion de l'Ukraine en 2022.",
+        "reference": "Les conflits conventionnels frappent d'abord la confiance et l'énergie.",
+    },
     "Changement de régime politique": {
         "canal_principal": "confiance",
         "propagation": {"confiance": 1.5, "taux": 0.7, "chine": 0.4},
