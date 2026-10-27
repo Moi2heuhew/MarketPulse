@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-geo_engine — Contexte geopolitique auto-detete depuis la presse mondiale.
-=========================================================================
-Ce module lit de VRAIS flux d'actualite internationale (RSS, aucune cle API,
-aucune dependance hors bibliotheque standard), detecte automatiquement les
-evenements geopolitiques dominants et leurs canaux de transmission, et
-construit un indice de climat que le score composite consomme directement.
-
-L'utilisateur ne choisit plus l'evenement : l'application le lit dans le monde
-reel. Si aucun flux ne repond, le contexte est "indisponible" et l'app retombe
-sur ses ancres internes (VIX + vocabulaire des titres financiers) sans planter.
+geo_engine v2 — Contexte geopolitique auto-detete depuis la presse mondiale.
+==========================================================================
+Corrections v2 :
+  1. « Escalade nucleaire ou attaque directe » devient une categorie SEPARREE
+     et stricte (marqueurs forts uniquement) : la couverture quotidienne d'un
+     conflit classique (missiles, frappes, troupes) ne la declenche plus.
+  2. Nouvelle categorie « Conflit arme et escalade militaire » pour la
+     couverture ordinaire des conflits.
+  3. Seuil d'election : un evenement n'est retenu qu'a partir de
+     MIN_ARTICLES_EVENEMENT titres ; en dessous, il contribue au climat
+     (index, canaux) mais n'est pas affiche comme evenement dominant.
+Aucune dependance hors bibliotheque standard.
 """
 
 import re
@@ -21,13 +23,14 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-# --- Sources : presse internationale, regions et biais mixtes ---------------
 FEEDS = [
     ("https://feeds.bbci.co.uk/news/world/rss.xml", "BBC World"),
     ("https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera"),
     ("https://www.euronews.com/rss?level=theme&name=news", "Euronews"),
     ("https://news.un.org/feed/subscribe/en/news/topic/peace-and-security/feed/rss.xml", "UN News"),
 ]
+
+MIN_ARTICLES_EVENEMENT = 3  # en dessous : contribue au climat, n'est pas elu
 
 # --- Taxonomie des evenements (frontieres de mots uniquement) ---------------
 EVENT_PATTERNS = {
@@ -43,9 +46,20 @@ EVENT_PATTERNS = {
         r"\btariff\w*", r"\btrade war", r"\bexport (control|ban|restriction)",
         r"\bimport ban", r"\bcustoms dut", r"\bchips? (ban|restriction|export)",
     ],
-    "military_escalation": [
+    # Conflit arme ordinaire : missiles, frappes, troupes, combats.
+    "military_conflict": [
         r"\bmissile", r"\bairstrike", r"\bmilitary strike", r"\btroops?\b",
-        r"\binvasion", r"\bescalation", r"\bnuclear", r"\bdrone attack",
+        r"\binvasion", r"\bdrone attack", r"\boffensive", r"\bclashes?\b",
+        r"\bfighting\b", r"\bshelling",
+    ],
+    # Escalade extreme : marqueurs forts uniquement, sinon la couverture
+    # quotidienne des guerres classiques suffit a la declencher a tort.
+    "nuclear_critical": [
+        r"\bnuclear (strike|attack|war|showdown)",
+        r"\batomic (bomb|attack|weapon)",
+        r"\battack on (a )?nuclear",
+        r"\bnuclear (plant|facility|submarine) (attacked|hit|struck|damaged)",
+        r"\bcritical infrastructure (attacked|hit|struck|strike)",
     ],
     "political_instability": [
         r"\bcoup\b", r"\bstate of emergency", r"\bgovernment collapse",
@@ -58,11 +72,11 @@ EVENTS_FR = {
     "energy_shock": "Sanctions et embargo énergétique",
     "maritime_conflict": "Conflit militaire avec risque de blocus maritime",
     "trade_war": "Guerre commerciale et hausse des tarifs",
-    "military_escalation": "Escalade nucléaire ou attaque directe",
+    "military_conflict": "Conflit armé et escalade militaire",
+    "nuclear_critical": "Escalade nucléaire ou attaque directe",
     "political_instability": "Changement de régime politique",
 }
 
-# Canaux de transmission (memes cles que CANAUX dans app.py)
 CHANNEL_PATTERNS = {
     "energie": [r"\boil\b", r"\bgas\b", r"\bbrent\b", r"\bfreight", r"\benergy",
                 r"\bpipeline", r"\btanker", r"\bstrait"],
@@ -144,8 +158,9 @@ def construire_contexte(titres: list, scores: list) -> dict:
     """Assemble le contexte geopolitique a partir des titres et de FinBERT.
 
     scores : liste de scores de sentiment [-1, +1], un par titre (FinBERT).
-    L'intensite d'un evenement est une heuristique explicite : negativite
-    moyenne de sa couverture + volume d'articles, plafonnee a 1.
+    Un evenement n'est elu qu'a partir de MIN_ARTICLES_EVENEMENT titres :
+    en dessous, il pese dans l'index et les canaux mais n'apparait pas comme
+    evenement dominant — eviter d'etiqueter le monde sur une seule depeche.
     """
     if not titres:
         return {"index": None, "events": [], "channels": {},
@@ -163,7 +178,6 @@ def construire_contexte(titres: list, scores: list) -> dict:
     sent_moyen = sum(t["score"] for t in titres) / n
     index = round(max(-1.0, min(1.0, -(part_neg * 0.5 + part_tension * 0.5) + sent_moyen * 0.5)), 3)
 
-    # Evenements dominants, comptes et classes
     compte, sent_ev, exemples = {}, {}, {}
     canaux_scores = {}
     for t in titres:
@@ -179,8 +193,9 @@ def construire_contexte(titres: list, scores: list) -> dict:
 
     events = []
     for ev, nb in compte.items():
+        if nb < MIN_ARTICLES_EVENEMENT:
+            continue  # trop peu d'articles pour etre elu evenement dominant
         sm = sum(sent_ev[ev]) / len(sent_ev[ev])
-        # Heuristique d'intensite, affichee comme telle : negativite + volume
         intensite = round(min(1.0, max(0.0, -sm + nb / 15.0)), 2)
         events.append({
             "evenement": ev,
@@ -192,7 +207,6 @@ def construire_contexte(titres: list, scores: list) -> dict:
         })
     events.sort(key=lambda e: -e["articles"])
 
-    # Intensite par canal : negativite de la couverture touchant chaque canal
     channels = {
         c: round(min(1.0, max(0.0, 0.5 - (sum(s) / len(s)) * 0.5)), 3)
         for c, s in canaux_scores.items()
