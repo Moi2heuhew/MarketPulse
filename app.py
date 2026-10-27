@@ -1369,6 +1369,10 @@ st.set_page_config(
 fetch_headlines_cached = st.cache_data(ttl=900, show_spinner=False)(fetch_headlines)
 historique_cached = st.cache_data(ttl=3600, show_spinner=False)(historique_marche)
 vix_cached = st.cache_data(ttl=3600, show_spinner=False)(vix_percentile)
+
+from geo_engine import fetch_geo_headlines, construire_contexte
+
+fetch_geo_cached = st.cache_data(ttl=3600, show_spinner=False)(fetch_geo_headlines)
 modele_cache = st.cache_resource(show_spinner=False)(charger_modele)
 
 
@@ -1488,7 +1492,12 @@ def calculer_decisions(details: pd.DataFrame, resume: list[dict], avec_marche: b
     """Couche decisionnelle : macro, facteurs, tendance, confiance, banc, seuils."""
     tous_titres = list(details["headline"])
     vix_pct, vix_err = vix_cached() if avec_marche else (None, "données de marché désactivées")
-    part_geo, exemples_geo = tension_geopolitique(tous_titres)
+    part_geo, exemples_geo = None, []
+    if avec_marche and contexte_geo and contexte_geo.get("index") is not None:
+        part_geo = min(1.0, max(0.0, -contexte_geo["index"]))
+        exemples_geo = contexte_geo["exemples_negatifs"]
+    else:
+        part_geo, exemples_geo = tension_geopolitique(tous_titres)
     macro, detail_macro = climat_macro(vix_pct, part_geo)
 
     decisions, erreurs = {}, []
@@ -1598,20 +1607,30 @@ avec_marche = st.checkbox(
     help="Décochez pour une analyse fondée sur la seule presse, plus rapide.",
 )
 
-evenement_geo = st.selectbox(
-    "Événement géopolitique de référence",
-    ["Aucun"] + list(EVENEMENTS_GEO.keys()),
-    help="Sert à chiffrer l'exposition de chaque titre aux canaux de transmission.",
-)
-evenement_geo = None if evenement_geo == "Aucun" else evenement_geo
-intensite_geo = st.slider(
-    "Intensité supposée de l'épisode (0 = menace verbale, 1 = rupture effective)",
-    0.0,
-    1.0,
-    0.6,
-    0.1,
-    disabled=evenement_geo is None,
-)
+# Contexte géopolitique AUTO-DÉTECTÉ depuis la presse mondiale (geo_engine)
+contexte_geo = None
+evenement_geo, intensite_geo = None, 0.0
+if avec_marche:
+    try:
+        with st.spinner("Lecture de l'actualité géopolitique mondiale…"):
+            titres_geo = fetch_geo_cached()
+        if titres_geo:
+            scores_geo = [r["score"] for r in scorer_avec_modele(
+                [t["headline"] for t in titres_geo]
+            )]
+            contexte_geo = construire_contexte(titres_geo, scores_geo)
+            if contexte_geo["events"]:
+                ev0 = contexte_geo["events"][0]
+                evenement_geo = ev0["evenement_fr"]
+                intensite_geo = ev0["intensite"]
+    except Exception:
+        contexte_geo = None
+if evenement_geo:
+    st.info(
+        f"Événement géopolitique détecté automatiquement : **{evenement_geo}** "
+        f"(intensité estimée {intensite_geo:.2f}, "
+        f"{contexte_geo['events'][0]['articles']} articles de presse mondiale)."
+    )
 
 if fichier is not None:
     try:
@@ -2042,6 +2061,19 @@ with st.expander("Climat externe pris en compte", expanded=bool(decisions["exemp
         st.caption("Exemples détectés :")
         for ex in decisions["exemples_geo"]:
             st.caption(f"· {_tronque(ex, 140)}")
+    if contexte_geo and contexte_geo.get("events"):
+        st.caption(f"Contexte détecté automatiquement ({contexte_geo['status']}) :")
+        for ev in contexte_geo["events"]:
+            with st.expander(
+                f"{ev['evenement_fr']} — {ev['articles']} articles "
+                f"(sentiment {ev['sentiment_moyen']:+.2f}, intensité {ev['intensite']:.2f})"
+            ):
+                for titre_geo, source_geo in ev["exemples"]:
+                    st.caption(f"· {titre_geo} — *{source_geo}*")
+        st.caption(
+            "Intensité = heuristique (négativité de la couverture + volume d'articles), "
+            "pas une estimation officielle."
+        )
     if decisions["vix_err"]:
         st.caption(f"VIX indisponible : {decisions['vix_err']}")
     st.caption(
