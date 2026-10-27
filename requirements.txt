@@ -3,3 +3,5 @@ yfinance>=0.2.40
 transformers>=4.40
 torch>=2.2
 pandas>=2.0
+feedparser>=6.0
+requests>=2.31
